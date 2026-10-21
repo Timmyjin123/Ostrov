@@ -78,6 +78,10 @@ public:
 
     // Audio ------------------------------------------------------------
     void render(float* outL, float* outR, int n) {
+        if (engines.empty()) {   // host called process before prepare
+            for (int i = 0; i < n; ++i) { outL[i] = 0.0f; outR[i] = 0.0f; }
+            return;
+        }
         if (params.engine != currentEngine) {
             currentEngine = clampEngine(params.engine);
             for (int v = 0; v < kMaxVoices; ++v) engines[(size_t)currentEngine]->reset(v);
