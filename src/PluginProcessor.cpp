@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "dsp/Presets.h"
 
 using namespace ostrov;
 using APVTS = juce::AudioProcessorValueTreeState;
@@ -23,12 +24,18 @@ APVTS::ParameterLayout OstrovProcessor::createLayout() {
     l.add(std::make_unique<AudioParameterFloat>(ParameterID{"release", 1}, "Release",
         NormalisableRange<float>(0.02f, 10.0f, 0.0f, 0.35f), 1.5f));
     l.add(pct("drift", "Drift", 0.3f));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"contour", 1}, "Contour",
+        NormalisableRange<float>(-1.0f, 1.0f), 0.0f));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID{"modDecay", 1}, "Decay",
+        NormalisableRange<float>(0.02f, 6.0f, 0.0f, 0.35f), 0.6f));
+    l.add(pct("width", "Width", 0.5f));
+    l.add(pct("drive", "Drive", 0.2f));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"spaceType", 1}, "Space",
-        StringArray{"Plate", "Tape", "Tape+Plate"}, 0));
+        StringArray{"Plate", "Tape", "Tape+Plate", "Shimmer"}, 0));
     l.add(pct("spaceMix", "Space Mix", 0.35f));
     l.add(pct("spaceSize", "Space Size", 0.6f));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID{"volume", 1}, "Volume",
-        NormalisableRange<float>(-36.0f, 6.0f), -6.0f));
+        NormalisableRange<float>(-36.0f, 6.0f), -3.0f));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"root", 1}, "Root", noteNames(), 0));
     StringArray scales; for (auto& s : scalePresets()) scales.add(s.name); scales.add("Custom");
     l.add(std::make_unique<AudioParameterChoice>(ParameterID{"scale", 1}, "Scale", scales, 1));
@@ -46,6 +53,7 @@ OstrovProcessor::OstrovProcessor()
       apvts(*this, nullptr, "OSTROV", createLayout()) {
     auto P = [&](const char* id) { return apvts.getRawParameterValue(id); };
     pEngine = P("engine"); pTimbre = P("timbre"); pColor = P("color"); pMotion = P("motion"); pBody = P("body");
+    pContour = P("contour"); pModDecay = P("modDecay"); pWidth = P("width"); pDrive = P("drive");
     pAttack = P("attack"); pRelease = P("release"); pDrift = P("drift"); pSpaceType = P("spaceType");
     pSpaceMix = P("spaceMix"); pSpaceSize = P("spaceSize"); pVolume = P("volume"); pRoot = P("root");
     pScale = P("scale"); pTuning = P("tuning"); pLock = P("lock"); pAftertouch = P("aftertouch");
@@ -92,6 +100,8 @@ void OstrovProcessor::readParams() {
     p.engine = (int)pEngine->load();
     p.macros.timbre = pTimbre->load(); p.macros.color = pColor->load();
     p.macros.motion = pMotion->load(); p.macros.body = pBody->load();
+    p.contour = pContour->load(); p.modDecay = pModDecay->load();
+    p.width = pWidth->load(); p.drive = pDrive->load();
     p.attack = pAttack->load(); p.release = pRelease->load(); p.drift = pDrift->load();
     p.spaceType = (int)pSpaceType->load(); p.spaceMix = pSpaceMix->load(); p.spaceSize = pSpaceSize->load();
     p.volumeDb = pVolume->load();
@@ -140,3 +150,20 @@ void OstrovProcessor::setStateInformation(const void* data, int sizeInBytes) {
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new OstrovProcessor(); }
+
+void OstrovProcessor::applyPreset(int index) {
+    const auto& list = ostrov::factoryPresets();
+    if (index < 0 || index >= (int)list.size()) return;
+    const auto& pr = list[(size_t)index];
+    auto set = [&](const char* id, float v) {
+        if (auto* p = apvts.getParameter(id)) {
+            p->beginChangeGesture(); p->setValueNotifyingHost(p->convertTo0to1(v)); p->endChangeGesture();
+        }
+    };
+    set("engine", (float)pr.engine);
+    set("timbre", pr.timbre); set("color", pr.color); set("motion", pr.motion); set("body", pr.body);
+    set("attack", pr.attack); set("release", pr.release); set("contour", pr.contour); set("modDecay", pr.modDecay);
+    set("width", pr.width); set("drift", pr.drift); set("drive", pr.drive);
+    set("spaceType", (float)pr.spaceType); set("spaceMix", pr.spaceMix); set("spaceSize", pr.spaceSize);
+    currentPreset = index;
+}

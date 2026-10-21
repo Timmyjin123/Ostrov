@@ -8,9 +8,9 @@
 
 namespace ostrov {
 
-enum EngineId { E_Bloom = 0, E_Drift, E_Fold, E_Bell, E_Choir, E_Breath, E_Count };
+enum EngineId { E_Bloom = 0, E_Drift, E_Fold, E_Bell, E_Choir, E_Breath, E_Glass, E_Tide, E_Count };
 inline const char* engineName(int e) {
-    static const char* n[] = {"Bloom", "Drift", "Fold", "Bell", "Choir", "Breath"};
+    static const char* n[] = {"Bloom", "Drift", "Fold", "Bell", "Choir", "Breath", "Glass", "Tide"};
     return (e >= 0 && e < E_Count) ? n[e] : "?";
 }
 
@@ -20,7 +20,11 @@ struct Params {
     float attack = 0.02f;     // seconds
     float release = 1.2f;     // seconds
     float drift = 0.3f;       // 0..1 slow per-voice pitch drift
-    int spaceType = 0;        // 0 plate, 1 tape, 2 tape->plate
+    float contour = 0.0f;     // -1..1 timbre envelope: + pluck (closes), - swell (opens)
+    float modDecay = 0.6f;    // seconds, timbre envelope time
+    float width = 0.5f;       // 0..1 two detuned layers + ensemble
+    float drive = 0.2f;       // 0..1 warm saturation before space
+    int spaceType = 0;        // 0 plate, 1 tape, 2 tape->plate, 3 shimmer
     float spaceMix = 0.35f;
     float spaceSize = 0.6f;
     float volumeDb = -6.0f;
@@ -43,14 +47,16 @@ public:
         engines.emplace_back(std::make_unique<BellEngine>(waves));
         engines.emplace_back(std::make_unique<ChoirEngine>(waves));
         engines.emplace_back(std::make_unique<BreathEngine>(waves));
-        plate.prepare(sr); tape.prepare(sr);
+        engines.emplace_back(std::make_unique<GlassEngine>(waves));
+        engines.emplace_back(std::make_unique<TideEngine>(waves));
+        plate.prepare(sr); tape.prepare(sr); octave.prepare(sr); ensemble.prepare(sr);
         (void)maxBlock;
         for (int v = 0; v < kMaxVoices; ++v) {
             voices[v] = {};
             voices[v].idx = v;
             voices[v].lfo[0].ph = 0.13f * v; voices[v].lfo[1].ph = 0.41f + 0.07f * v; voices[v].lfo[2].ph = 0.77f + 0.03f * v;
         }
-        for (auto& e : engines) for (int v = 0; v < kMaxVoices; ++v) e->reset(v);
+        for (auto& e : engines) for (int v = 0; v < kMaxSlots; ++v) e->reset(v);
         currentEngine = -1;
     }
 
@@ -64,9 +70,9 @@ public:
         Voice& vo = voices[v];
         const bool wasSilent = !vo.active;
         vo.active = true; vo.gate = true; vo.key = midi; vo.note = note;
-        vo.vel = velocity; vo.strike = velocity; vo.press = 0.0f; vo.age = ++ageCounter;
+        vo.vel = velocity; vo.strike = velocity; vo.press = 0.0f; vo.age = ++ageCounter; vo.modEnv = 1.0f;
         if (wasSilent) { vo.env = 0.0f; vo.cents = targetCents(vo); }
-        if (currentEngine >= 0) engines[(size_t)currentEngine]->reset(v);
+        if (currentEngine >= 0) { engines[(size_t)currentEngine]->reset(v); engines[(size_t)currentEngine]->reset(v + kMaxVoices); }
     }
     void noteOff(int midi) {
         for (auto& vo : voices) if (vo.active && vo.gate && vo.key == midi) vo.gate = false;
@@ -84,7 +90,7 @@ public:
         }
         if (params.engine != currentEngine) {
             currentEngine = clampEngine(params.engine);
-            for (int v = 0; v < kMaxVoices; ++v) engines[(size_t)currentEngine]->reset(v);
+            for (int v = 0; v < kMaxSlots; ++v) engines[(size_t)currentEngine]->reset(v);
         }
         int done = 0;
         while (done < n) {
@@ -103,7 +109,7 @@ private:
     struct Voice {
         bool active = false, gate = false;
         int key = 60, note = 60, idx = 0;
-        float vel = 0.8f, env = 0.0f, strike = 0.0f, press = 0.0f, pressSm = 0.0f, cents = 0.0f;
+        float vel = 0.8f, env = 0.0f, strike = 0.0f, press = 0.0f, pressSm = 0.0f, cents = 0.0f, modEnv = 0.0f;
         uint32_t age = 0;
         Lfo lfo[3];
     };
@@ -119,7 +125,9 @@ private:
     int refPc = 0;
     Macros mSm; bool mInit = false;
     float mixSm = 0.35f, sizeSm = 0.6f, volSm = 0.5f;
-    Plate plate; TapeDelay tape;
+    Plate plate; TapeDelay tape; OctaveUp octave; Ensemble ensemble;
+    float shimFb = 0.0f, shimLp = 0.0f;
+    float voiceBuf2[32];
     DcBlock dcL, dcR;
     float envBuf[kChunk], strikeBuf[kChunk], voiceBuf[kChunk];
 
@@ -169,6 +177,7 @@ private:
         const float sC = onePoleCoeff(0.22f, sr);
         const float centsC = onePoleCoeff(params.tuning == TuningMode::JustAdaptive ? 0.08f : 0.01f, sr / (float)kChunk);
         const float lfoSr = sr / (float)kChunk;
+        const float modC = std::exp(-(float)n / (std::max(params.modDecay, 0.01f) * sr));
 
         for (auto& vo : voices) {
             if (!vo.active) continue;
@@ -185,18 +194,40 @@ private:
                 envBuf[i] = vo.env;
                 strikeBuf[i] = vo.strike + vo.pressSm * params.aftertouchAmt;
             }
-            VoiceIn in; in.freq = freq; in.sr = sr; in.env = envBuf; in.strike = strikeBuf;
-            in.vel = vo.vel; in.idx = vo.idx; in.n = n;
-            eng.render(in, mSm, voiceBuf);
-            // stereo spread by voice index, collapsing to centre at low level
+            // timbre envelope (contour) + velocity -> per-voice macros
+            vo.modEnv *= modC;
+            Macros mv = mSm;
+            mv.timbre = clampf(mSm.timbre + params.contour * vo.modEnv + 0.2f * (vo.vel - 0.6f), 0.0f, 1.0f);
+            VoiceIn in; in.sr = sr; in.env = envBuf; in.strike = strikeBuf;
+            in.vel = vo.vel; in.voice = vo.idx; in.n = n;
+            const bool twoLayers = params.width > 0.01f;
             const float spread = 0.2f + 0.06f * (float)vo.idx;
+            const float detC = params.width * 7.0f + mSm.motion * 3.0f;
+            in.slot = vo.idx;
+            in.freq = twoLayers ? freq * std::exp2(detC / 1200.0f) : freq;
+            eng.render(in, mv, voiceBuf);
+            if (twoLayers) {
+                in.slot = vo.idx + kMaxVoices;
+                in.freq = freq * std::exp2(-detC / 1200.0f);
+                eng.render(in, mv, voiceBuf2);
+            }
+            const float w = params.width * 0.45f;
             for (int i = 0; i < n; ++i) {
                 const float e = envBuf[i];
-                const float pan = 0.5f + (spread - 0.5f) * std::min(1.0f, e * 3.0f);
-                const float g = e * (0.55f + 0.45f * vo.vel) * 0.28f;
-                const float s = voiceBuf[i] * g;
-                L[i] += s * std::sqrt(1.0f - pan);
-                R[i] += s * std::sqrt(pan);
+                const float open = std::min(1.0f, e * 3.0f);
+                const float g = e * (0.55f + 0.45f * vo.vel) * 0.36f;
+                if (twoLayers) {
+                    const float pa = clampf(0.5f + (spread - 0.5f) * open - w, 0.0f, 1.0f);
+                    const float pb = clampf(0.5f + (spread - 0.5f) * open + w, 0.0f, 1.0f);
+                    const float a = voiceBuf[i] * g * 0.72f, b = voiceBuf2[i] * g * 0.72f;
+                    L[i] += a * std::sqrt(1.0f - pa) + b * std::sqrt(1.0f - pb);
+                    R[i] += a * std::sqrt(pa) + b * std::sqrt(pb);
+                } else {
+                    const float pan = 0.5f + (spread - 0.5f) * open;
+                    const float s = voiceBuf[i] * g;
+                    L[i] += s * std::sqrt(1.0f - pan);
+                    R[i] += s * std::sqrt(pan);
+                }
             }
             if (!vo.gate && vo.env < 1e-4f) vo.active = false;
         }
@@ -206,22 +237,30 @@ private:
         mixSm += (params.spaceMix - mixSm) * pc;
         sizeSm += (params.spaceSize - sizeSm) * pc;
         volSm += (std::pow(10.0f, params.volumeDb / 20.0f) - volSm) * pc;
+        const float drv = 1.0f + params.drive * 5.0f;
+        const float makeup = 1.0f / (1.0f + params.drive * 1.6f);
+        const float asym = 0.05f + params.drive * 0.12f;
         for (int i = 0; i < n; ++i) {
-            float l = dcL.process(asymSat(L[i] * 1.2f, 0.06f));
-            float r = dcR.process(asymSat(R[i] * 1.2f, 0.06f));
-            l = fastTanh(l); r = fastTanh(r);
+            float l = dcL.process(asymSat(fastTanh(L[i] * 1.2f * drv), asym)) * makeup;
+            float r = dcR.process(asymSat(fastTanh(R[i] * 1.2f * drv), asym)) * makeup;
+            ensemble.process(l, r, params.width * 0.7f);
             float wl = 0, wr = 0;
             if (params.spaceType == 0) {
                 plate.process(l, r, sizeSm, wl, wr);
             } else if (params.spaceType == 1) {
                 tape.process(l, r, sizeSm, wl, wr);
-            } else {
+            } else if (params.spaceType == 2) {
                 float tl, tr;
                 tape.process(l, r, sizeSm * 0.8f, tl, tr);
                 plate.process(l * 0.5f + tl, r * 0.5f + tr, sizeSm, wl, wr);
+            } else {
+                plate.process(l + shimFb, r + shimFb, 0.4f + 0.4f * sizeSm, wl, wr);
+                const float up = octave.process(0.5f * (wl + wr));
+                shimLp += (up - shimLp) * 0.25f;
+                shimFb = fastTanh(shimLp * (0.1f + 0.16f * sizeSm) * 2.0f) * 0.5f;
             }
-            L[i] = (l + wl * mixSm * 1.2f) * volSm;
-            R[i] = (r + wr * mixSm * 1.2f) * volSm;
+            L[i] = fastTanh((l + wl * mixSm * 1.2f) * volSm);
+            R[i] = fastTanh((r + wr * mixSm * 1.2f) * volSm);
         }
     }
 };

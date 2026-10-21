@@ -138,4 +138,49 @@ private:
     DelayLine l, r; Lfo wow, flut; Noise noise; DcBlock dcL, dcR;
 };
 
+// Octave-up pitch shifter: two crossfaded read heads sweeping a short window
+class OctaveUp {
+public:
+    void prepare(float sr) { win = (int)(0.06f * sr); d.init(win * 2 + 8); ph = 0.0f; }
+    void clear() { d.clear(); }
+    float process(float x) {
+        d.push(x);
+        ph += 1.0f / (float)win; if (ph >= 1.0f) ph -= 1.0f;
+        float y = 0.0f;
+        for (int h = 0; h < 2; ++h) {
+            float p = ph + 0.5f * (float)h; if (p >= 1.0f) p -= 1.0f;
+            const float delay = (1.0f - p) * (float)win + 2.0f;     // shrinking delay -> 2x speed
+            y += d.tapFrac(delay) * std::sin(kPi * p);
+        }
+        return y;
+    }
+private:
+    DelayLine d; int win = 2048; float ph = 0.0f;
+};
+
+// Stereo ensemble: three modulated taps per side (BBD-style string ensemble)
+class Ensemble {
+public:
+    void prepare(float sampleRate) { sr = sampleRate; l.init((int)(0.05f * sr)); r.init((int)(0.05f * sr)); }
+    void clear() { l.clear(); r.clear(); }
+    void process(float& L, float& R, float amount) {
+        l.push(L); r.push(R);
+        if (amount <= 0.001f) return;
+        static const float rates[3] = {0.33f, 0.51f, 0.73f};
+        float wl = 0.0f, wr = 0.0f;
+        for (int k = 0; k < 3; ++k) {
+            ph[k] += rates[k] / sr; if (ph[k] >= 1.0f) ph[k] -= 1.0f;
+            const float a = std::sin(kTwoPi * (ph[k] + 0.333f * (float)k));
+            const float b = std::sin(kTwoPi * (ph[k] + 0.333f * (float)k + 0.25f));
+            wl += l.tapFrac((0.011f + 0.003f * a) * sr);
+            wr += r.tapFrac((0.011f + 0.003f * b) * sr);
+        }
+        L = L * (1.0f - 0.4f * amount) + wl * 0.33f * amount * 0.9f;
+        R = R * (1.0f - 0.4f * amount) + wr * 0.33f * amount * 0.9f;
+    }
+private:
+    float sr = 48000.0f, ph[3] = {0.0f, 0.3f, 0.6f};
+    DelayLine l, r;
+};
+
 } // namespace ostrov

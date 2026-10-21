@@ -1,5 +1,6 @@
 // Offline renderer: writes demo WAVs for every engine (no plugin host needed).
 #include "../src/dsp/Synth.h"
+#include "../src/dsp/Presets.h"
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -48,21 +49,15 @@ int main(int argc, char** argv) {
     chord(9.0f, 4.0f, {50, 57, 62}, 0.6f);
     const float total = 15.5f;
 
-    struct Look { Macros m; float atk, rel; int space; float mix, size; };
-    const Look looks[E_Count] = {
-        {{0.55f, 0.35f, 0.45f, 0.25f}, 0.02f, 1.5f, 0, 0.35f, 0.65f},   // Bloom
-        {{0.45f, 0.45f, 0.6f, 0.45f},  0.08f, 1.2f, 2, 0.3f, 0.55f},    // Drift
-        {{0.5f, 0.4f, 0.4f, 0.3f},     0.03f, 1.0f, 1, 0.3f, 0.45f},    // Fold
-        {{0.6f, 0.2f, 0.5f, 0.55f},    0.002f, 2.5f, 0, 0.4f, 0.7f},    // Bell
-        {{0.35f, 0.5f, 0.6f, 0.45f},   0.25f, 1.5f, 0, 0.45f, 0.75f},   // Choir
-        {{0.7f, 0.2f, 0.5f, 0.5f},     0.15f, 1.8f, 2, 0.4f, 0.7f},     // Breath
-    };
-
-    for (int e = 0; e < E_Count; ++e) {
+    const std::string only = argc > 2 ? argv[2] : "";
+    for (const auto& pr : factoryPresets()) {
+        if (!only.empty() && only != pr.name) continue;
         syn.prepare((float)sr, 512);
         Params p;
-        p.engine = e; p.macros = looks[e].m; p.attack = looks[e].atk; p.release = looks[e].rel;
-        p.spaceType = looks[e].space; p.spaceMix = looks[e].mix; p.spaceSize = looks[e].size;
+        p.engine = pr.engine; p.macros = {pr.timbre, pr.color, pr.motion, pr.body};
+        p.attack = pr.attack; p.release = pr.release; p.contour = pr.contour; p.modDecay = pr.modDecay;
+        p.width = pr.width; p.drift = pr.drift; p.drive = pr.drive;
+        p.spaceType = pr.spaceType; p.spaceMix = pr.spaceMix; p.spaceSize = pr.spaceSize; p.volumeDb = -3.0f;
         p.root = 2; p.scaleMask = scalePresets()[3].mask; p.scaleLock = true; p.tuning = TuningMode::JustAdaptive;
         syn.setParams(p);
         const int N = (int)(total * sr);
@@ -81,8 +76,9 @@ int main(int argc, char** argv) {
             sum += L[i] * L[i] + R[i] * R[i];
         }
         const double rms = std::sqrt(sum / (2.0 * N));
-        std::printf("%-7s peak %.3f  rms %.4f (%.1f dBFS) %s\n", engineName(e), peak, rms, 20 * std::log10(rms + 1e-12), bad ? "NAN!" : "");
-        writeWav(outDir + "/ostrov_" + engineName(e) + ".wav", L, R, sr);
+        std::printf("%-15s %-6s peak %.3f  rms %.1f dBFS %s\n", pr.name, engineName(pr.engine), peak, 20 * std::log10(rms + 1e-12), bad ? "NAN!" : "");
+        std::string fn = pr.name; for (auto& c : fn) if (c == ' ') c = '_';
+        writeWav(outDir + "/" + fn + ".wav", L, R, sr);
     }
     return 0;
 }

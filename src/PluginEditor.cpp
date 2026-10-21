@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "dsp/Presets.h"
 
 using namespace ostrov_ui;
 using juce::Colour;
@@ -180,12 +181,25 @@ OstrovEditor::OstrovEditor(OstrovProcessor& p) : AudioProcessorEditor(&p), proc(
     attack = std::make_unique<Knob>(s, "attack", "Attack", false);
     release= std::make_unique<Knob>(s, "release", "Release", false);
     drift  = std::make_unique<Knob>(s, "drift", "Drift", false);
+    contour= std::make_unique<Knob>(s, "contour", "Contour", false);
+    modDecay=std::make_unique<Knob>(s, "modDecay", "Decay", false);
+    width  = std::make_unique<Knob>(s, "width", "Width", false);
+    drive  = std::make_unique<Knob>(s, "drive", "Drive", false);
     mix    = std::make_unique<Knob>(s, "spaceMix", "Mix", false);
     size   = std::make_unique<Knob>(s, "spaceSize", "Size", false);
     volume = std::make_unique<Knob>(s, "volume", "Volume", false);
     for (auto* k : {timbre.get(), color.get(), motion.get(), body.get(), attack.get(), release.get(),
-                    drift.get(), mix.get(), size.get(), volume.get()})
+                    contour.get(), modDecay.get(), width.get(), drift.get(), drive.get(),
+                    mix.get(), size.get(), volume.get()})
         addAndMakeVisible(k);
+    {
+        int id = 1;
+        for (const auto& pr : ostrov::factoryPresets()) presets.addItem(pr.name, id++);
+        presets.setTextWhenNothingSelected("Presets");
+        if (proc.currentPreset >= 0) presets.setSelectedId(proc.currentPreset + 1, juce::dontSendNotification);
+        presets.onChange = [this] { const int id = presets.getSelectedId(); if (id > 0) proc.applyPreset(id - 1); };
+        addAndMakeVisible(presets);
+    }
 
     auto fill = [](juce::ComboBox& cb, juce::RangedAudioParameter* prm) {
         if (auto* ch = dynamic_cast<juce::AudioParameterChoice*>(prm)) cb.addItemList(ch->choices, 1);
@@ -201,7 +215,7 @@ OstrovEditor::OstrovEditor(OstrovProcessor& p) : AudioProcessorEditor(&p), proc(
     lockAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(s, "lock", lock);
     addAndMakeVisible(ring);
 
-    setSize(860, 500);
+    setSize(960, 540);
     startTimerHz(20);
 }
 
@@ -215,41 +229,39 @@ void OstrovEditor::timerCallback() {
 
 void OstrovEditor::paint(juce::Graphics& g) {
     g.fillAll(Palette::bg());
-    auto b = getLocalBounds();
-    // wordmark
     g.setColour(Palette::text()); g.setFont(uiFont(26.0f, true));
-    g.drawText("OSTROV", 28, 18, 200, 32, juce::Justification::centredLeft);
-    g.setColour(Palette::dim()); g.setFont(uiFont(11.5f));
-    g.drawText("soft waves / just intervals / drifting space", 28, 48, 320, 16, juce::Justification::centredLeft);
-    // panels
+    g.drawText("OSTROV", 28, 16, 170, 32, juce::Justification::centredLeft);
+    g.setColour(Palette::dim()); g.setFont(uiFont(11.0f));
+    g.drawText("soft waves / just intervals / drifting space", 28, 46, 260, 16, juce::Justification::centredLeft);
     g.setColour(Palette::panel());
-    g.fillRoundedRectangle(juce::Rectangle<float>(20, 84, 520, 396), 12.0f);
-    g.fillRoundedRectangle(juce::Rectangle<float>(556, 84, 284, 396), 12.0f);
+    g.fillRoundedRectangle(juce::Rectangle<float>(20, 76, 584, 444), 12.0f);
+    g.fillRoundedRectangle(juce::Rectangle<float>(620, 76, 320, 444), 12.0f);
     g.setColour(Palette::line());
-    g.drawLine(40, 300, 520, 300, 1.0f);
+    g.drawLine(40, 272, 584, 272, 1.0f);
+    g.drawLine(40, 398, 584, 398, 1.0f);
     g.setColour(Palette::dim()); g.setFont(uiFont(11.0f, true));
-    g.drawText("VOICE", 40, 312, 120, 14, juce::Justification::centredLeft);
-    g.drawText("SPACE", 300, 312, 120, 14, juce::Justification::centredLeft);
-    g.drawText("SCALE", 576, 96, 120, 14, juce::Justification::centredLeft);
-    juce::ignoreUnused(b);
+    g.drawText("SHAPE", 40, 282, 120, 14, juce::Justification::centredLeft);
+    g.drawText("CHARACTER", 340, 282, 120, 14, juce::Justification::centredLeft);
+    g.drawText("SPACE", 40, 408, 120, 14, juce::Justification::centredLeft);
+    g.drawText("SCALE", 640, 88, 120, 14, juce::Justification::centredLeft);
+    g.setFont(uiFont(11.0f));
+    g.drawText("click: note on/off   shift-click: set root", 640, 492, 290, 14, juce::Justification::centredLeft);
 }
 
 void OstrovEditor::resized() {
-    // engine selector
-    int x = 360;
-    for (auto* btn : engineButtons) { btn->setBounds(x, 26, 76, 30); x += 80; }
-    // big macros
-    const int bigW = 116, top = 110;
+    presets.setBounds(220, 22, 180, 28);
+    int x = 420;
+    for (auto* btn : engineButtons) { btn->setBounds(x, 22, 62, 30); x += 66; }
     int bx = 40;
-    for (auto* k : {timbre.get(), color.get(), motion.get(), body.get()}) { k->setBounds(bx, top, bigW, 150); bx += 122; }
-    // voice row
-    const int sy = 334, sw = 70, sh = 86;
-    attack->setBounds(40, sy, sw, sh); release->setBounds(112, sy, sw, sh); drift->setBounds(184, sy, sw, sh);
-    // space row
-    spaceType.setBounds(300, sy + 4, 112, 26);
-    mix->setBounds(300, sy + 36, 60, 74); size->setBounds(362, sy + 36, 60, 74); volume->setBounds(440, sy, sw, sh);
-    // scale panel
-    ring.setBounds(578, 112, 240, 240);
-    root.setBounds(576, 364, 76, 26); scale.setBounds(658, 364, 162, 26);
-    tuning.setBounds(576, 398, 160, 26); lock.setBounds(740, 398, 100, 26);
+    for (auto* k : {timbre.get(), color.get(), motion.get(), body.get()}) { k->setBounds(bx, 92, 124, 160); bx += 136; }
+    const int sy = 300, sw = 66, sh = 88;
+    attack->setBounds(40, sy, sw, sh); release->setBounds(110, sy, sw, sh);
+    contour->setBounds(180, sy, sw, sh); modDecay->setBounds(250, sy, sw, sh);
+    width->setBounds(340, sy, sw, sh); drift->setBounds(410, sy, sw, sh); drive->setBounds(480, sy, sw, sh);
+    const int py = 428;
+    spaceType.setBounds(40, py + 8, 130, 26);
+    mix->setBounds(190, py, sw, sh); size->setBounds(260, py, sw, sh); volume->setBounds(480, py, sw, sh);
+    ring.setBounds(650, 104, 260, 260);
+    root.setBounds(640, 380, 80, 26); scale.setBounds(726, 380, 196, 26);
+    tuning.setBounds(640, 414, 170, 26); lock.setBounds(818, 414, 110, 26);
 }

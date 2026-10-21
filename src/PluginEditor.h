@@ -57,7 +57,8 @@ private:
     OstrovProcessor& proc;
     ostrov_ui::LookAndFeel lnf;
     juce::OwnedArray<juce::TextButton> engineButtons;
-    std::unique_ptr<ostrov_ui::Knob> timbre, color, motion, body, attack, release, drift, mix, size, volume;
+    std::unique_ptr<ostrov_ui::Knob> timbre, color, motion, body, attack, release, contour, modDecay, width, drift, drive, mix, size, volume;
+    juce::ComboBox presets;
     juce::ComboBox spaceType, root, scale, tuning;
     juce::ToggleButton lock { "Scale Lock" };
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> spaceAtt, rootAtt, scaleAtt, tuningAtt;

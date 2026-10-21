@@ -38,6 +38,8 @@ public:
     int referencePitchClass() const { return refPc.load(); }
     void toggleNote(int semitoneFromRoot);   // switches the scale to Custom if needed
     static constexpr int kCustomScale = 14;
+    void applyPreset(int index);
+    int currentPreset = -1;
 
 private:
     ostrov::Synth synth;
@@ -48,6 +50,7 @@ private:
     std::atomic<float>* pSpaceMix{}; std::atomic<float>* pSpaceSize{}; std::atomic<float>* pVolume{};
     std::atomic<float>* pRoot{}; std::atomic<float>* pScale{}; std::atomic<float>* pTuning{};
     std::atomic<float>* pLock{}; std::atomic<float>* pAftertouch{};
+    std::atomic<float>* pContour{}; std::atomic<float>* pModDecay{}; std::atomic<float>* pWidth{}; std::atomic<float>* pDrive{};
     std::atomic<float>* pDeg[12]{};
     void readParams();
     void handleMidi(const juce::MidiMessage& m);
