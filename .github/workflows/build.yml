@@ -72,9 +72,16 @@ jobs:
           path: dist/Ostrov-mac.zip
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: Ostrov 0.1.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          body: |
+            Установка одной командой в Терминале:
+            curl -L https://github.com/Timmyjin123/Ostrov/releases/latest/download/Ostrov-mac.zip -o /tmp/Ostrov.zip && rm -rf /tmp/Ostrov && unzip -q /tmp/Ostrov.zip -d /tmp/Ostrov && bash /tmp/Ostrov/install.sh
           files: dist/Ostrov-mac.zip
 
   demo-audio:
