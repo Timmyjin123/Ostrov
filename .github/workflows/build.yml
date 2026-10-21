@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Cache JUCE
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: juce-8.0.4-${{ runner.os }}
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Build plugin
+        run: cmake --build build --target Ostrov_VST3 Ostrov_AU Ostrov_Standalone --parallel
+
+      - name: Sign (ad-hoc) and package
+        run: |
+          A=build/Ostrov_artefacts/Release
+          mkdir -p dist
+          for b in "$A/VST3/Ostrov.vst3" "$A/AU/Ostrov.component" "$A/Standalone/Ostrov.app"; do
+            codesign --force --deep --sign - "$b"
+          done
+          ditto -c -k --keepParent "$A/VST3/Ostrov.vst3" dist/Ostrov-VST3-mac.zip
+          ditto -c -k --keepParent "$A/AU/Ostrov.component" dist/Ostrov-AU-mac.zip
+          ditto -c -k --keepParent "$A/Standalone/Ostrov.app" dist/Ostrov-Standalone-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ostrov-mac
+          path: dist/*.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+
+  demo-audio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render demo WAVs
+        run: |
+          g++ -O2 -std=c++17 -o render tools/render_demo.cpp
+          mkdir -p demo && ./render demo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ostrov-demo-audio
+          path: demo/*.wav

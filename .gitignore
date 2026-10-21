@@ -1,0 +1,5 @@
+build/
+build-*/
+demo/*.wav
+*.log
+.DS_Store
